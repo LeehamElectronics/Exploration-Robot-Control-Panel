@@ -1,0 +1,4 @@
+paho-mqtt==1.5.0
+virtualenv==20.0.26
+cefpython3==66.0
+pygame==1.9.6
