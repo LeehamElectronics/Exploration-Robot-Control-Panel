@@ -10,6 +10,11 @@
 This project is developed entirely by Liam Price in order to pass the VET IT SAT. The overall function of this software is to act as a Control Panel for my Exploration Robot. The actual Arduino code that runs on the Robot is contained in another Repo here:
 https://github.com/LeehamElectronics/Exploration-Robot-Arduino
 	
+Here is a YouTube video with a basic demonstration of the system: [YouTube Video](https://www.youtube.com/watch?v=0TiRYpMsIOc&t=27s) 
+
+And here is a link to the engineering and design folio for this project: [Engineering Folio](https://drive.google.com/file/d/1ohp7j_BZnhxLjLv0mqf6PKU2e-KAmkB1/view?usp=sharing) 
+	
+
 ## Technologies
 Project is created with:
 * PyCharm Community Edition
