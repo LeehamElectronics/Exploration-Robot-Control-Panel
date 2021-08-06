@@ -20,6 +20,7 @@
 
 # Libraries Here #
 from tkinter import *
+from PIL import ImageTk, Image  # Used for rotating images
 import paho.mqtt.client as mqtt
 import time, logging
 import multiprocessing
@@ -33,6 +34,15 @@ import json
 crane_positions = {}
 crane_constraints = {}
 crane_speeds = {}
+tank_gyro_values = {}
+birds_eye_image = Image.open("media/birds_eye_sqaure.png")
+front_tank_view = Image.open("media/front_view_tank.png")
+side_tank_view = Image.open("media/side_view_tank.png")
+
+yaw_prev = 1000
+pitch_prev = 1000
+rotation_temp_prev = 1000
+
 
 #########################################################################
 #                                                                       #
@@ -70,28 +80,31 @@ def ctrl_mode_val_update(*args):
         custom_controller_func()
 
 
+def remap(x, in_min, in_max, out_min, out_max):
+    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
+
+
 #########################################################################
 #                                                                       #
 #                         MQTT Setup Code                               #
 #                                                                       #
 #########################################################################
 online_mode = False
-mqtt_ip = ""
-mqtt_port = 0
-cred_user = ""
-cred_pass = ""
+connection_profile = {}
 
 
 def connect_mqtt():
     print("Connecting to mqtt")
-    client.username_pw_set(cred_user, cred_pass)
-    client.connect(mqtt_ip, mqtt_port)  # establish connection
+    client.username_pw_set(connection_profile['cred_user'], connection_profile['cred_pass'])
+    client.connect(connection_profile['mqtt_ip'], connection_profile['mqtt_port'])  # establish connection
     time.sleep(1)
     client.loop_start()
     client.subscribe("/ExpR/out")  # subscribe to mqtt topic
     client.subscribe("/ExpR/out/crane_pos")  # subscribe to mqtt topic
     client.subscribe("/ExpR/out/crane_con")  # subscribe to mqtt topic
     client.subscribe("/ExpR/out/crane_speed")  # subscribe to mqtt topic
+    client.subscribe("/ExpR/out/current_main")  # subscribe to mqtt topic for reading current usage
+    client.subscribe("/ExpR/out/tank_gyro")  # subscribe to mqtt topic for reading gyro values
     print("Connect success!")
     main_window_setup()
 
@@ -111,6 +124,16 @@ def on_connect(client, userdata, flags, rc):
 
 
 def on_message(client, userdata, message):
+    global final_img
+    global final_pitch_img
+    global final_yaw_img
+    global rotated_b
+    global rotated_f
+    global rotated_s
+    global yaw_prev
+    global pitch_prev
+    global rotation_temp_prev
+
     msg = str(message.payload.decode("utf-8"))
     topic = str(message.topic)
 
@@ -160,6 +183,67 @@ def on_message(client, userdata, message):
         crane_CA_speed_var.set(crane_speed_dict["cs"])
         crane_FA_speed_var.set(crane_speed_dict["fs"])
         crane_gripper_speed_var.set(crane_speed_dict["gs"])
+    elif topic == "/ExpR/out/current_main":
+        print("New current value: " + msg)
+        OldMax = 140
+        OldMin = 110
+        NewMax = 100
+        NewMin = 0
+
+        NewValue = remap(float(msg), OldMin, OldMax, NewMin, NewMax)
+
+        final = int(round(NewValue, 1))
+        print(final)
+        power_usage.set(final)
+    elif topic == "/ExpR/out/tank_gyro":
+        print("New gyro value RAW: " + msg)
+        try:
+            print("Trying to read JSON data now...")
+            tank_gyro_values = json.loads(msg)
+            print("Succsefully read JSON file: ")
+            print(str(tank_gyro_values))
+        except Exception as failure:
+            print("Failed to read JSON because of: " + failure)
+
+        pitch = int(tank_gyro_values["r"])
+        yaw = int(tank_gyro_values["p"])
+        # if yaw < 0:
+        #    yaw = abs(yaw)
+        # else:
+        #    y = yaw * 2
+        #    yaw = yaw - y
+        rotation_temp = int(tank_gyro_values["y"])
+        if rotation_temp < 0:
+            rotation_temp = abs(rotation_temp)
+        else:
+            r = rotation_temp * 2
+            rotation_temp = rotation_temp - r
+
+        robot_gyro_yaw_val.set(yaw)
+        robot_gyro_pitch_val.set(pitch)
+        robot_gyro_rot_val.set(rotation_temp)
+
+        if rotation_temp != rotation_temp_prev:
+            rotation_temp_prev = rotation_temp
+            rotated_b = birds_eye_image.rotate(rotation_temp)
+            final_img = ImageTk.PhotoImage(rotated_b)
+            gyro_rotation_picture = Label(gyro_frame, image=final_img, justify=CENTER, relief=RAISED, bg="gray")
+            gyro_rotation_picture.grid(row=3, column=0, columnspan=2)
+
+        if pitch != pitch_prev:
+            pitch_prev = pitch
+            rotated_f = front_tank_view.rotate(pitch)
+            final_pitch_img = ImageTk.PhotoImage(rotated_f)
+            gyro_pitch_picture = Label(gyro_frame, image=final_pitch_img, justify=CENTER, relief=RAISED, bg="gray")
+            gyro_pitch_picture.grid(row=3, column=2, columnspan=2)
+
+        if yaw != yaw_prev:
+            yaw_prev = yaw
+            rotated_s = side_tank_view.rotate(yaw)
+            final_yaw_img = ImageTk.PhotoImage(rotated_s)
+            gyro_yaw_picture = Label(gyro_frame, image=final_yaw_img, justify=CENTER, relief=RAISED, bg="gray")
+            gyro_yaw_picture.grid(row=3, column=4, columnspan=2)
+
     else:
         print("unhandled topic: " + topic + " msg: " + msg)
 
@@ -178,6 +262,7 @@ client.on_connect = on_connect  # assign function to callback
 client.on_message = on_message  # when a payload is received this function runs
 client.on_publish = on_publish
 
+
 #########################################################################
 #                                                                       #
 #  Below are the functions specific for each event that is called from  #
@@ -185,8 +270,6 @@ client.on_publish = on_publish
 #                       value to the MQTT broker.                       #
 #                                                                       #
 #########################################################################
-
-
 def forward():
     global lte_1_pic
     global bottom_frame
@@ -222,6 +305,7 @@ def stop():
 
 def light_toggle():
     print("Light Toggle")
+    client.publish("/ExpR/in/SW_btn_d", "6")
 
 
 def get_crane_pos():
@@ -302,6 +386,18 @@ def send_new_crane_speed():
     client.publish("/ExpR/in/ncs", crane_speeds_string)
 
 
+def send_new_timing_values():
+    print("Sending new timings values to robot")
+    timings = {}
+
+    timings["c"] = robot_current_meas_timing.get()
+    timings["g"] = robot_gyro_update_timing.get()
+
+    timings_string = json.dumps(timings)
+    print(timings_string)
+    client.publish("/ExpR/in/nt", timings_string)
+
+
 def key_pressed(event):
     global arrow_forward_button
     key = event.keysym
@@ -317,31 +413,27 @@ def key_pressed(event):
     if key == "space":
         stop()
 
-def start_steering_wheel_ctrl():
+
+def start_steering_wheel_ctrl(prfl):
     # Some of the Pygame code was taken directly from the Pygame wiki as an example that I built off. Google Pygame for
     # more info on the module
     print("Starting steering_wheel_module")
     # You will need to manually set your MQTT credentials and connection options here, I know it's annoying, but it's
     # difficult for me to parse the variables from the login screen into this function because it's running on another
     # CPU core, if you would like to help, contact me at liamisprice@gmail.com
-    public_user = "public_user_example"
-    public_pass = "public_pass_example"
-    mqtt_ip = "example.com"
-    mqtt_port = 1883
-    print("Connecting to mqtt with " + str(mqtt_ip) + " and port " + str(mqtt_port))
+    print(f"Connecting to mqtt with {prfl['mqtt_ip']} and port {prfl['mqtt_port']}")
     logging.basicConfig(level=logging.INFO)  # Error Logging #
-    QOS = 0  # QoS Level keep at 0
-    CLEAN_SESSION = True
     client = mqtt.Client("ExpR-CtrlP-Steering", False)  # create client object
     client.on_subscribe = on_subscribe  # assign function to callback
     client.on_disconnect = on_disconnect  # assign function to callback
     client.on_connect = on_connect  # assign function to callback
     client.on_message = on_message  # when a payload is received this function runs
-    client.username_pw_set(public_user, public_pass)
-    client.connect(mqtt_ip, mqtt_port)  # establish connection
+    client.username_pw_set(prfl['cred_user'], prfl['cred_pass'])
+    client.connect(prfl['mqtt_ip'], prfl['mqtt_port'])  # establish connection
     time.sleep(1)
     client.loop_start()
     print("Connect success!")
+    # import pygame_sdl2 as pygame
     import pygame
     # Define some colors.
     BLACK = pygame.Color('black')
@@ -374,7 +466,7 @@ def start_steering_wheel_ctrl():
     pygame.init()
 
     # Set the width and height of the screen (width, height).
-    screen = pygame.display.set_mode((500, 700))
+    screen = pygame.display.set_mode((600, 2000))
 
     pygame.display.set_caption("ExpR Steering Wheel GUI")
 
@@ -555,26 +647,26 @@ def start_steering_wheel_ctrl():
                 if axis_0_current != axis_0_temp:
                     if axis_0_current > 0:
                         if axis_0_current < 1:
-                            axis_0_temp = round(abs(axis_0_current - 1),1)
+                            axis_0_temp = round(abs(axis_0_current - 1), 1)
                             axis_0_temp = str(axis_0_temp)
                             print("SOFT RIGHT " + axis_0_temp)
                             client.publish("/ExpR/in/SW_axs_0/Rs", axis_0_temp)
                             axis_0_temp = axis_0_current
                         else:
-                            axis_0_temp = round(axis_0_current - 1,1)
+                            axis_0_temp = round(axis_0_current - 1, 1)
                             axis_0_temp = str(axis_0_temp)
                             print("HARD RIGHT" + axis_0_temp)
                             client.publish("/ExpR/in/SW_axs_0/Rh", axis_0_temp)
                             axis_0_temp = axis_0_current
                     else:
                         if axis_0_current > -1:
-                            axis_0_temp = round(axis_0_current + 1,1)
+                            axis_0_temp = round(axis_0_current + 1, 1)
                             axis_0_temp = str(axis_0_temp)
                             print("SOFT LEFT " + axis_0_temp)
                             client.publish("/ExpR/in/SW_axs_0/Ls", axis_0_temp)
                             axis_0_temp = axis_0_current
                         else:
-                            axis_0_temp = round(abs(axis_0_current + 1),1)
+                            axis_0_temp = round(abs(axis_0_current + 1), 1)
                             axis_0_temp = str(axis_0_temp)
                             print("HARD LEFT" + axis_0_temp)
                             client.publish("/ExpR/in/SW_axs_0/Lh", axis_0_temp)
@@ -670,10 +762,9 @@ def start_steering_wheel_ctrl():
 
 
 def custom_controller_func():
+    print("PROFILE: " + str(connection_profile))
+    sw_ctrl = multiprocessing.Process(target=start_steering_wheel_ctrl, args=(connection_profile,))
     sw_ctrl.start()
-
-
-sw_ctrl = multiprocessing.Process(target=start_steering_wheel_ctrl)
 
 
 #########################################################################
@@ -691,7 +782,6 @@ my_window.bind("<Key>", key_pressed)
 #                           String Variables                            #
 #                                                                       #
 #########################################################################
-
 power_val = StringVar()
 power_val.set("HIGH")
 power_val.trace('w', power_val_update)
@@ -730,13 +820,21 @@ crane_CA_speed_var = StringVar()
 crane_FA_speed_var = StringVar()
 crane_gripper_speed_var = StringVar()
 
+# Robot update timing values:
+robot_current_meas_timing = StringVar()
+robot_gyro_update_timing = StringVar()
+
+# Robot Gyro values:
+robot_gyro_yaw_val = StringVar()
+robot_gyro_pitch_val = StringVar()
+robot_gyro_rot_val = StringVar()
+
+
 #########################################################################
 #                                                                       #
 #                         Geometry Management                           #
 #                                                                       #
 #########################################################################
-
-
 def main_window_setup():
     global bg_photo  # This stops the garbage collector from deleting the photo #
     global video_frame
@@ -746,12 +844,15 @@ def main_window_setup():
     global four_g_pic
     global three_g_pic
     global arrow_forward_button
+    global gyro_frame
+    global my_window
+    global power_usage
     my_window.title("Exploration Robot Control Panel")
     # Use the following two lines for getting max screen resolution:
-    # screen_width = my_window.winfo_screenwidth()
-    # screen_height = my_window.winfo_screenheight()
-    width = 1450
-    height = 900
+    width = my_window.winfo_screenwidth()
+    height = my_window.winfo_screenheight()
+    # width = 1450
+    # height = 900
     my_window.geometry(f'{width}x{height}')
     my_window.iconbitmap('media/IoTER_icon.ico')
     my_window.configure(background='grey')
@@ -767,19 +868,21 @@ def main_window_setup():
     bottom_frame = Frame(my_window, bg="dim gray")
     # video_frame = Frame(my_window, bg="dim gray")
     left_frame = Frame(my_window, bg="dim gray")
-    joystick_frame = Frame(my_window, bg="black")
+    joystick_frame = Frame(my_window, bg="gray40")
     left_crane_control_frame = Frame(my_window, bg="dim gray")
     right_frame = Frame(my_window, bg="dim gray")
+    gyro_frame = Frame(my_window, bg="gray40")
     # video_option_frame = Frame(my_window, bg="dim gray")
     # Grid all the frames in place #
     # top_frame.grid(row=0, column=0, columnspan=3, sticky="n") # NOT USED ATM
     # video_frame.grid(row=1, column=0, sticky="n")
     # video_option_frame.grid(row=3, column=0, sticky="sw")
-    left_frame.grid(row=0, column=0, sticky="nw")
-    left_crane_control_frame.grid(row=0, column=5, sticky="ne", rowspan=3)
-    right_frame.grid(row=1, column=0, sticky="nw")
-    joystick_frame.grid(row=0, column=1, sticky="nw")
-    bottom_frame.grid(row=4, column=0, columnspan=2, sticky="sw")
+    left_frame.grid(row=0, column=0, sticky="nw")  # power usage stuff
+    gyro_frame.grid(row=0, column=1, sticky="nw", rowspan=3)
+    left_crane_control_frame.grid(row=0, column=5, sticky="ne", rowspan=3)  # crane input / output panel
+    right_frame.grid(row=1, column=0, sticky="nw")  # power selecting thing
+    joystick_frame.grid(row=0, column=2, sticky="nw")  # joystick / button widgets
+    bottom_frame.grid(row=4, column=0, sticky="sw", columnspan=4)  # network status stuff
 
     # top_frame Widget Creation #
 
@@ -796,43 +899,54 @@ def main_window_setup():
     power_usage_lab = Message(left_frame, text="Power Usage:", width=60, justify=CENTER, relief=SUNKEN, bg="Green")
     power_in_lab = Message(left_frame, text="Power Input:", width=60, justify=CENTER, relief=SUNKEN, bg="Green")
     power_usage = Scale(left_frame, from_=100, to=0, orient=VERTICAL, width=15, relief=SUNKEN)
-    power_usage.config(state='disabled')
     power_in = Scale(left_frame, from_=100, to=0, orient=VERTICAL, width=15, relief=SUNKEN)
     power_in.config(state='disabled')
     power_eta_lab = Message(left_frame, text="ETA Battery: 2 Hours", width=90, justify=CENTER, relief=RAISED)
-    ### Crane Position Menu ###
-    crane_pos_get_but = Button(left_crane_control_frame, text="Get crane position values:", width=20, justify=CENTER, relief=RAISED, bg="Orange", command=get_crane_pos)
-    crane_rot_pos_label = Label(left_crane_control_frame, text="Current rotation value: ", width=30, justify=CENTER, relief=RAISED, bg="dark orange")
-    crane_CA_pos_label = Label(left_crane_control_frame, text="Current center_axis_1 value: ", width=30, justify=CENTER, relief=RAISED,
-                                bg="dark orange")
-    crane_CA_2_pos_label = Label(left_crane_control_frame, text="Current center_axis_2 value: ", width=30, justify=CENTER, relief=RAISED,
-                                bg="dark orange")
-    crane_FA_pos_label = Label(left_crane_control_frame, text="Current forearm value: ", width=30, justify=CENTER, relief=RAISED,
-                                bg="dark orange")
-    crane_gripper_pos_label = Label(left_crane_control_frame, text="Current gripper value: ", width=30, justify=CENTER, relief=RAISED,
+
+    # Crane Position Menu #
+    crane_pos_get_but = Button(left_crane_control_frame, text="Get crane position values:", width=20, justify=CENTER,
+                               relief=RAISED, bg="Orange", command=get_crane_pos)
+    crane_rot_pos_label = Label(left_crane_control_frame, text="Current rotation value: ", width=30, justify=CENTER,
+                                relief=RAISED, bg="dark orange")
+    crane_CA_pos_label = Label(left_crane_control_frame, text="Current center_axis_1 value: ", width=30, justify=CENTER,
+                               relief=RAISED,
                                bg="dark orange")
+    crane_CA_2_pos_label = Label(left_crane_control_frame, text="Current center_axis_2 value: ", width=30,
+                                 justify=CENTER, relief=RAISED,
+                                 bg="dark orange")
+    crane_FA_pos_label = Label(left_crane_control_frame, text="Current forearm value: ", width=30, justify=CENTER,
+                               relief=RAISED,
+                               bg="dark orange")
+    crane_gripper_pos_label = Label(left_crane_control_frame, text="Current gripper value: ", width=30, justify=CENTER,
+                                    relief=RAISED,
+                                    bg="dark orange")
     crane_rot_pos_entry = Entry(left_crane_control_frame, textvariable=crane_rot_pos_var, justify=CENTER)
     crane_CA_pos_entry = Entry(left_crane_control_frame, textvariable=crane_CA_pos_var, justify=CENTER)
     crane_CA_2_pos_entry = Entry(left_crane_control_frame, textvariable=crane_CA_2_pos_var, justify=CENTER)
     crane_FA_pos_entry = Entry(left_crane_control_frame, textvariable=crane_FA_pos_var, justify=CENTER)
     crane_gripper_pos_entry = Entry(left_crane_control_frame, textvariable=crane_gripper_pos_var, justify=CENTER)
-    crane_pos_default_append = Button(left_crane_control_frame, text="Set current crane pos to default", width=30, justify=CENTER, relief=RAISED,
-                               bg="Orange", command=append_crane_pos)
+    crane_pos_default_append = Button(left_crane_control_frame, text="Set current crane pos to default", width=30,
+                                      justify=CENTER, relief=RAISED,
+                                      bg="Orange", command=append_crane_pos)
 
-    send_new_crane_pos_button = Button(left_crane_control_frame, text="Send custom crane values", width=30, justify=CENTER,
-                                      relief=RAISED, bg="white", command=send_new_crane_pos)
+    send_new_crane_pos_button = Button(left_crane_control_frame, text="Send custom crane values", width=30,
+                                       justify=CENTER,
+                                       relief=RAISED, bg="white", command=send_new_crane_pos)
 
     # Crane Movement Constraints Menu #
     crane_con_get_but = Button(left_crane_control_frame, text="Get crane constraint vals:", width=20, justify=CENTER,
-                                 relief=RAISED, bg="Orange", command=get_crane_con)
-    crane_rot_con_label = Label(left_crane_control_frame, text="Current rotation Constraint X/Y: ", width=30, justify=CENTER,
+                               relief=RAISED, bg="Orange", command=get_crane_con)
+    crane_rot_con_label = Label(left_crane_control_frame, text="Current rotation Constraint X/Y: ", width=30,
+                                justify=CENTER,
                                 relief=RAISED, bg="dark orange")
-    crane_CA_con_label = Label(left_crane_control_frame, text="Current center_axis Constraint X/Y: ", width=30, justify=CENTER,
-                                 relief=RAISED, bg="dark orange")
-    crane_FA_con_label = Label(left_crane_control_frame, text="Current forearm Constraint X/Y: ", width=30, justify=CENTER,
-                                 relief=RAISED, bg="dark orange")
+    crane_CA_con_label = Label(left_crane_control_frame, text="Current center_axis Constraint X/Y: ", width=30,
+                               justify=CENTER,
+                               relief=RAISED, bg="dark orange")
+    crane_FA_con_label = Label(left_crane_control_frame, text="Current forearm Constraint X/Y: ", width=30,
+                               justify=CENTER,
+                               relief=RAISED, bg="dark orange")
     crane_gripper_con_label = Label(left_crane_control_frame, text="Current gripper Constraint X/Y: ", width=30,
-                                       justify=CENTER, relief=RAISED, bg="dark orange")
+                                    justify=CENTER, relief=RAISED, bg="dark orange")
     # x values
     crane_rot_con_x_entry = Entry(left_crane_control_frame, textvariable=crane_rot_con_x, justify=CENTER, width=9)
     crane_CA_con_x_entry = Entry(left_crane_control_frame, textvariable=crane_cen_con_x, justify=CENTER, width=9)
@@ -844,34 +958,45 @@ def main_window_setup():
     crane_FA_con_y_entry = Entry(left_crane_control_frame, textvariable=crane_fa_con_y, justify=CENTER, width=9)
     crane_gripper_con_y_entry = Entry(left_crane_control_frame, textvariable=crane_gr_con_y, justify=CENTER, width=9)
     crane_con_default_append = Button(left_crane_control_frame, text="Set current constraints to default",
-                                    width=30, justify=CENTER, relief=RAISED, bg="Orange", command=append_crane_con)
+                                      width=30, justify=CENTER, relief=RAISED, bg="Orange", command=append_crane_con)
     send_new_crane_con_button = Button(left_crane_control_frame, text="Send custom constraint vals", width=30,
-                                         justify=CENTER, relief=RAISED, bg="white", command=send_new_crane_constraints)
+                                       justify=CENTER, relief=RAISED, bg="white", command=send_new_crane_constraints)
 
     # Crane Movement Speed Menu #
     crane_speed_get_but = Button(left_crane_control_frame, text="Get crane speed values:", width=20, justify=CENTER,
-                               relief=RAISED, bg="Orange", command=get_crane_speed)
+                                 relief=RAISED, bg="Orange", command=get_crane_speed)
     crane_rot_speed_label = Label(left_crane_control_frame, text="Current rotation speed: ", width=30, justify=CENTER,
-                                relief=RAISED, bg="dark orange")
+                                  relief=RAISED, bg="dark orange")
     crane_CA_speed_label = Label(left_crane_control_frame, text="Current center_axis speed: ", width=30, justify=CENTER,
-                               relief=RAISED,
-                               bg="dark orange")
+                                 relief=RAISED,
+                                 bg="dark orange")
     crane_FA_speed_label = Label(left_crane_control_frame, text="Current forearm speed: ", width=30, justify=CENTER,
-                               relief=RAISED,
-                               bg="dark orange")
-    crane_gripper_speed_label = Label(left_crane_control_frame, text="Current gripper speed: ", width=30, justify=CENTER,
-                                    relief=RAISED,
-                                    bg="dark orange")
+                                 relief=RAISED,
+                                 bg="dark orange")
+    crane_gripper_speed_label = Label(left_crane_control_frame, text="Current gripper speed: ", width=30,
+                                      justify=CENTER,
+                                      relief=RAISED,
+                                      bg="dark orange")
     crane_rot_speed_entry = Entry(left_crane_control_frame, textvariable=crane_rot_speed_var, justify=CENTER)
     crane_CA_speed_entry = Entry(left_crane_control_frame, textvariable=crane_CA_speed_var, justify=CENTER)
     crane_FA_speed_entry = Entry(left_crane_control_frame, textvariable=crane_FA_speed_var, justify=CENTER)
     crane_gripper_speed_entry = Entry(left_crane_control_frame, textvariable=crane_gripper_speed_var, justify=CENTER)
     crane_speed_default_append = Button(left_crane_control_frame, text="Set current crane speed to default", width=30,
-                                      justify=CENTER, relief=RAISED, bg="Orange", command=append_crane_speed)
+                                        justify=CENTER, relief=RAISED, bg="Orange", command=append_crane_speed)
 
     send_new_crane_speed_button = Button(left_crane_control_frame, text="Send custom speed values", width=30,
-                                       justify=CENTER, relief=RAISED, bg="white", command=send_new_crane_speed)
-
+                                         justify=CENTER, relief=RAISED, bg="white", command=send_new_crane_speed)
+    tank_current_msr_timer_lab = Label(left_crane_control_frame, text="Power usage update interval: ", width=35,
+                                       justify=CENTER, relief=RAISED, bg="dark orange")
+    tank_current_msr_timer_entry = Entry(left_crane_control_frame, textvariable=robot_current_meas_timing,
+                                         justify=CENTER,
+                                         width=9)
+    tank_gyro_timer_lab = Label(left_crane_control_frame, text="Robot Gyroscope update interval: ", width=35,
+                                justify=CENTER, relief=RAISED, bg="dark orange")
+    tank_gyro_timer_entry = Entry(left_crane_control_frame, textvariable=robot_gyro_update_timing, justify=CENTER,
+                                  width=9)
+    send_new_timing_values_button = Button(left_crane_control_frame, text="Send new timing values", width=25,
+                                           justify=CENTER, relief=RAISED, bg="white", command=send_new_timing_values)
 
     # left_frame Widget Placement #
     bat_lvl_lab.grid(row=0, column=0, columnspan=2, pady=(0, 5))
@@ -884,7 +1009,7 @@ def main_window_setup():
 
     # left_crane_menu_frame Widget Placement #
     # crane position:
-    crane_pos_get_but.grid(row=6, column=0, columnspan=2, pady=(5,0))
+    crane_pos_get_but.grid(row=6, column=0, columnspan=2, pady=(5, 0))
     crane_rot_pos_label.grid(row=7, column=0, columnspan=2, pady=(5, 0))
     crane_CA_pos_label.grid(row=8, column=0, columnspan=2, pady=(5, 0))
     crane_CA_2_pos_label.grid(row=9, column=0, columnspan=2, pady=(5, 0))
@@ -928,6 +1053,28 @@ def main_window_setup():
     crane_FA_speed_entry.grid(row=24, column=2, columnspan=2, pady=(5, 0))
     crane_gripper_speed_entry.grid(row=25, column=2, columnspan=2, pady=(5, 0))
 
+    tank_current_msr_timer_lab.grid(row=28, column=0, columnspan=2, pady=(5, 0))
+    tank_current_msr_timer_entry.grid(row=28, column=2, columnspan=2, pady=(5, 0))
+    tank_gyro_timer_lab.grid(row=29, column=0, columnspan=2, pady=(5, 0))
+    tank_gyro_timer_entry.grid(row=29, column=2, columnspan=2, pady=(5, 0))
+    send_new_timing_values_button.grid(row=30, column=0, columnspan=2, pady=(5, 0))
+
+    # GyroFrame widget creation #
+    gyro_yaw_label = Label(gyro_frame, text="Yaw: ", width=10, justify=CENTER, relief=RAISED, bg="dark orange")
+    gyro_yaw_var_label = Entry(gyro_frame, textvariable=robot_gyro_yaw_val, justify=CENTER, width=9)
+    gyro_pitch_label = Label(gyro_frame, text="Pitch: ", width=10, justify=CENTER, relief=RAISED, bg="dark orange")
+    gyro_pitch_var_label = Entry(gyro_frame, textvariable=robot_gyro_pitch_val, justify=CENTER, width=9)
+    gyro_rotation_label = Label(gyro_frame, text="Rotation: ", width=10, justify=CENTER, relief=RAISED,
+                                bg="dark orange")
+    gyro_rotation_var_label = Entry(gyro_frame, textvariable=robot_gyro_rot_val, justify=CENTER, width=9)
+
+    gyro_yaw_label.grid(row=0, column=3, columnspan=1, pady=(5, 0), sticky="w")
+    gyro_yaw_var_label.grid(row=0, column=3, columnspan=1, pady=(5, 0), sticky="e")
+    gyro_pitch_label.grid(row=1, column=3, columnspan=1, pady=(5, 0), sticky="w")
+    gyro_pitch_var_label.grid(row=1, column=3, columnspan=1, pady=(5, 0), sticky="e")
+    gyro_rotation_label.grid(row=2, column=3, columnspan=1, pady=(5, 0), sticky="w")
+    gyro_rotation_var_label.grid(row=2, column=3, columnspan=1, pady=(5, 0), sticky="e")
+
     # right_frame Widget Creation #
     power_sel_label = Label(right_frame, text="Performance:", justify=CENTER, relief=RAISED, font="bold")
     power_sel = OptionMenu(right_frame, power_val, "HIGH", "MED", "LOW")
@@ -959,24 +1106,20 @@ def main_window_setup():
     arrow_right_button.grid(row=2, column=2)
     stop_button.grid(row=2, column=1)
 
-    # video_frame_options Widget Creation #
-    # start_video_but = Button(video_option_frame, text="Start Video")
-    # video_frame_options Widget Placement #
-    # start_video_but.grid(row=0, column=1, pady=(0, 40))
-
     # bottom_frame Widget Creation #
     net_stat_label = Label(bottom_frame, text="Network Status:", justify=CENTER, relief=RAISED, font="bold")
     ping_server_label = Message(bottom_frame, text=" Ping To Server: 500ms ", justify=CENTER, relief=RAISED, bg="black",
                                 fg="white", width=190)
     ping_traverse_label = Message(bottom_frame, text=" Ping To ExpR: 800ms   ", justify=CENTER, relief=RAISED,
                                   bg="black", fg="white", width=190)
-    bandwidth_stat_label = Label(bottom_frame, text="  Network Bandwidth:  ", justify=CENTER, relief=RAISED, font="bold")
+    bandwidth_stat_label = Label(bottom_frame, text="  Network Bandwidth:  ", justify=CENTER, relief=RAISED,
+                                 font="bold")
     bandwidth_out_label = Message(bottom_frame, text=" Out: 30 bps     ", justify=CENTER, relief=RAISED, bg="black",
                                   fg="white", width=190)
     bandwidth_in_label = Message(bottom_frame, text=" In: 50 bps      ", justify=CENTER, relief=RAISED, bg="black",
                                  fg="white", width=190)
     signal_strength_label = Message(bottom_frame, text="Signal Strength:", justify=CENTER, relief=RAISED, bg="white",
-                                 fg="black", width=190)
+                                    fg="black", width=190)
     lte_0_pic = PhotoImage(file="media/lte-0.png")
     lte_1_pic = PhotoImage(file="media/lte-1.png")
     lte_2_pic = PhotoImage(file="media/lte-2.png")
@@ -984,7 +1127,7 @@ def main_window_setup():
     lte_4_pic = PhotoImage(file="media/lte-4.png")
     signal_strength = Label(bottom_frame, image=lte_0_pic)
     signal_type_label = Message(bottom_frame, text="Connection Via:", justify=CENTER, relief=RAISED, bg="white",
-                                 fg="black", width=190)
+                                fg="black", width=190)
     wifi_pic = PhotoImage(file="media/wifi_symbol_new.png")
     three_g_pic = PhotoImage(file="media/3g_symbol.png")
     four_g_pic = PhotoImage(file="media/4g_symbol_new.png")
@@ -1011,7 +1154,6 @@ def loop_main_window():
     else:
         print("Starting in Offline Mode")
     my_window.mainloop()
-
 
 #########################################################################
 #                                                                       #
