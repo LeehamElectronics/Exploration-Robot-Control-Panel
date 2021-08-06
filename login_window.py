@@ -21,6 +21,8 @@
 # Import Modules #
 from tkinter import *
 from tkinter.messagebox import showinfo
+import json
+import PIL.Image as Image
 
 ############################################
 #                                          #
@@ -31,6 +33,8 @@ profile = []
 pass_attempt = 0
 online_mode = False
 login_password = "class"  # You can change this!
+side_tank_view = Image.open("media/side_view_tank.png")
+path_to_profiles = 'misc_data/configuration.json'
 
 #########################################################################
 #                                                                       #
@@ -73,13 +77,18 @@ def initiate_mqtt():
     mqtt_port = int(port_input_val.get())
     cred_user = mqtt_user_input_val.get()
     cred_pass = mqtt_pass_input_val.get()
+
+    connection_profile_temp = {
+        'mqtt_ip': mqtt_ip,
+        'mqtt_port': mqtt_port,
+        'cred_user': cred_user,
+        'cred_pass': cred_pass
+                          }
+
     try:
         import main_window as main
         main.online_mode = True  # Tell main_window that we are in online mode
-        main.mqtt_ip = mqtt_ip
-        main.mqtt_port = mqtt_port
-        main.cred_user = cred_user
-        main.cred_pass = cred_pass
+        main.connection_profile = connection_profile_temp
         main.connect_mqtt()
     except Exception as reason:
         online_mode_val.set("Connection Failed!")
@@ -103,39 +112,13 @@ def on_network_type_change(*args):
 def on_custom_connection_change(*args):
     connection_id = str(connection_type_sel_val.get())
     if connection_id == "Public":
-        print("Displaying Public Creds")
-        ip_input_val.set(public_IP)
-        port_input_val.set(public_port)
-        mqtt_user_input_val.set(public_user)
-        mqtt_pass_input_val.set(public_pass)
-        set_entry_read_only()
-        save_butt.grid_remove()  # Remove save button if it is there because we don't want to modify this data
+        read_custom_connection('public')
+
     if connection_id == "Internal":
-        print("Displaying Internal Creds")
-        ip_input_val.set(internal_IP)
-        port_input_val.set(internal_port)
-        mqtt_user_input_val.set(internal_user)
-        mqtt_pass_input_val.set(internal_pass)
-        set_entry_read_only()
-        save_butt.grid_remove()  # Remove save button if it is there because we don't want to modify this data
+        read_custom_connection('internal')
+
     if connection_id == "Custom":
-        print("Loading Custom Profile")
-        read_custom_connection()
-        set_entry_normal()
-        save_butt.grid(row=7, column=0)
-
-def set_entry_read_only():
-    ip_input.config(state='readonly')
-    port_input.config(state='readonly')
-    user_input.config(state='readonly')
-    pass_input.config(state='readonly')
-
-
-def set_entry_normal():
-    ip_input.config(state='normal')
-    port_input.config(state='normal')
-    user_input.config(state='normal')
-    pass_input.config(state='normal')
+        read_custom_connection('custom')
 
 
 def remove_custom_widgets():  # Call this function when offline mode enabled so as to not confuse user #
@@ -158,47 +141,79 @@ def replace_custom_widgets():  # Inverse of remove_custom_widgets #
     port_input.grid(row=4, column=0)
     user_input.grid(row=5, column=0)
     pass_input.grid(row=6, column=0)
+    save_butt.grid(row=7, column=0)
     connection_type_sel_val.set("Public")  # Return to default values #
 
-def read_custom_connection(*args):
+
+# function will read given profile from json file and display it in entry widgets.
+def read_custom_connection(profile):
     print("Reading connection profile")
-    connection_list = []
-    custom_profiles = 'MQTT_profiles.txt'
-    f = open(custom_profiles, "r")  # open this file
-    field = 0
-    for line in f.readlines():   # read lines
-        line = line.rstrip('\n') # remove the carriage return /n at the end of each line
-        if field == 0:
-            connection_list.append(line)
-            field += 1
-        elif field == 1:
-            connection_list.append(line)
-            field += 1
-        elif field == 2:
-            connection_list.append(line)
-            field += 1
-        elif field == 3:
-            connection_list.append(line)
-            field = 0
-    print(connection_list)
-    ip_input_val.set(connection_list[0])
-    port_input_val.set(connection_list[1])
-    mqtt_user_input_val.set(connection_list[2])
-    mqtt_pass_input_val.set(connection_list[3])
-    f.close()
+
+    # read json file into a dictionary
+    with open(path_to_profiles) as f:
+        file = json.load(f)
+
+        if not file:
+            # file is empty, create it...
+            new_dict = {
+                'public': {
+                    'ip': '201.127.10.44',
+                    'port': '443',
+                    'user': 'admin',
+                    'password': 'srBf46^jkA'
+                },
+                'internal': {
+                    'ip': '192.168.1.1',
+                    'port': '1883',
+                    'user': 'random_username',
+                    'password': 'srBf46^jkA'
+                },
+                'custom': {
+                    'ip': '10.44.20.1',
+                    'port': '132',
+                    'user': 'admin',
+                    'password': 'srBf46^jkA'
+                }
+            }
+            out_file = open(path_to_profiles, "w")
+            json.dump(new_dict, out_file, indent=1)
+            file = new_dict
+
+        profile_dict = file[profile]
+        ip = profile_dict['ip']
+        port = profile_dict['port']
+        user = profile_dict['user']
+        password = profile_dict['password']
+
+    ip_input_val.set(ip)
+    port_input_val.set(port)
+    mqtt_user_input_val.set(user)
+    mqtt_pass_input_val.set(password)
 
 
-def save_custom_connection(*args):
+def save_profile():
     print("Saving connection vars to txt file")
+    connection_type = str(connection_type_sel_val.get())
     connection_list = [ip_input_val.get(), port_input_val.get(), mqtt_user_input_val.get(), mqtt_pass_input_val.get()]
     print(connection_list)
-    custom_profiles = 'MQTT_profiles.txt'
-    f = open(custom_profiles, "w")  # open this file
-    f.write('%s\n' % connection_list[0])
-    f.write('%s\n' % connection_list[1])
-    f.write('%s\n' % connection_list[2])
-    f.write('%s\n' % connection_list[3])
-    f.close()
+
+    # read json file into a dictionary
+    with open(path_to_profiles) as f:
+        file = json.load(f)
+    if connection_type == 'Public':
+        profile_ref = 'public'
+    elif connection_type == 'Internal':
+        profile_ref = 'internal'
+    else:
+        profile_ref = 'custom'
+
+    file[profile_ref]['ip'] = connection_list[0]
+    file[profile_ref]['port'] = connection_list[1]
+    file[profile_ref]['user'] = connection_list[2]
+    file[profile_ref]['password'] = connection_list[3]
+
+    out_file = open(path_to_profiles, "w")
+    json.dump(file, out_file, indent=1)
 
 
 # Function that runs when the "enter" key is hit #
@@ -210,31 +225,9 @@ def key_pressed(event):
 
 #########################################################################
 #                                                                       #
-#                         MQTT Setup Code                               #
-#                                                                       #
-#########################################################################
-
-# Password Variables, these a predefined so you can easily select them #
-# I added options for both internal and external, meaning inside of    #
-# private network or outside for those running their MQTT servers in   #
-# their own homes.                                                     #
-public_user = "public_user_example"
-public_pass = "public_pass_example"
-internal_user = "internal_user_example"
-internal_pass = "internal_pass_example"
-
-# MQTT Server Variables #
-public_IP = "public_ip_example"  # MQTT Broker public IPv4 / DNS address #
-internal_IP = "internal_ip_example"  # MQTT Broker public IPv4 / DNS address #
-public_port = 1883  # External MQTT Broker port number #
-internal_port = 1883  # Internal MQTT Broker port number #
-
-#########################################################################
-#                                                                       #
 #                         Tkinter Setup Code                            #
 #                                                                       #
 #########################################################################
-
 login_window = Tk()
 login_window.title("IoT Exploration Robot Login")
 screen_width = login_window.winfo_screenwidth()
@@ -254,7 +247,6 @@ bg_photo_label.place(x=-32, y=-20)
 #                           String Variables                            #
 #                                                                       #
 #########################################################################
-
 online_mode_val = StringVar()
 online_mode_val.set("Offline Mode")
 online_mode_val.trace('w', on_network_type_change)
@@ -272,10 +264,10 @@ password_feedback = StringVar()
 #                         Geometry Management                           #
 #                                                                       #
 #########################################################################
-
 # Organise sections of GUI into frames #
 top_frame = Frame(login_window)
 bottom_frame = Frame(login_window, bg='gray')
+
 # Grid all the frames in place #
 top_frame.grid(row=0, sticky="n")
 bottom_frame.grid(row=3, sticky="s")
@@ -293,7 +285,7 @@ ip_input = Entry(bottom_frame, width=20, justify='center', textvariable=ip_input
 port_input = Entry(bottom_frame, width=20, justify='center', textvariable=port_input_val)
 user_input = Entry(bottom_frame, width=20, justify='center', textvariable=mqtt_user_input_val)
 pass_input = Entry(bottom_frame, width=20, justify='center', textvariable=mqtt_pass_input_val)
-save_butt = Button(login_window, text="Save", bg="white", fg="black", height=2, width=15)
+save_butt = Button(login_window, text="Save", bg="white", fg="black", height=2, width=15, command=save_profile)
 
 # Main Frame Widget Placement #
 enter_pass_lab.place(relx=0.43, rely=0.45, anchor=CENTER)
@@ -308,15 +300,7 @@ user_input.grid(row=5, column=0)
 pass_input.grid(row=6, column=0)
 
 # Set any Entry Variables Here #
-print("Displaying Public Creds")
-ip_input_val.set(public_IP)
-port_input_val.set(public_port)
-mqtt_user_input_val.set(public_user)
-mqtt_pass_input_val.set(public_pass)
 password_feedback.set("  Enter Password  ")
-
-# Set entry's to read only mode #
-set_entry_read_only()
 
 # Default to offline mode #
 remove_custom_widgets()
